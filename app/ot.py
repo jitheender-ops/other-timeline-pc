@@ -310,7 +310,13 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code); self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", "no-store"); self.end_headers(); self.wfile.write(body)
 
+    def local(self):  # DNS rebinding: a hostile site renamed to 127.0.0.1 still sends its own Host
+        if self.headers.get("Host") in (f"localhost:{PORT}", f"127.0.0.1:{PORT}"):
+            return True
+        self.send(403, {"error": "forbidden"})
+
     def do_GET(self):
+        if not self.local(): return
         u = urlparse(self.path); q = parse_qs(u.query)
         if u.path == "/":
             return self.send(200, (Path(__file__).parent / "dashboard.html").read_bytes(), "text/html; charset=utf-8")
@@ -324,6 +330,7 @@ class H(BaseHTTPRequestHandler):
         self.send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self.local(): return
         if self.headers.get("X-OT") != "1":  # other websites can't add this header, so they can't press buttons
             return self.send(403, {"error": "forbidden"})
         u = urlparse(self.path); q = parse_qs(u.query)
