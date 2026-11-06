@@ -4,6 +4,14 @@ powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e
 
 Write-Host "2. Visual effects back to 'let Windows choose'..."
 Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" -Name "VisualFXSetting" -Value 0 -ErrorAction SilentlyContinue
+$backup = Join-Path $PSScriptRoot "optimize_pc_mask.txt"
+if (Test-Path $backup) {
+    $mask = [byte[]]((Get-Content $backup -Raw).Trim() -split "," | ForEach-Object { [Convert]::ToByte($_, 16) })
+    Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "UserPreferencesMask" -Value $mask
+    Remove-Item $backup
+}
+Set-ItemProperty -Path "HKCU:\Control Panel\Desktop\WindowMetrics" -Name "MinAnimate" -Value "1" -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarAnimations" -Value 1 -ErrorAction SilentlyContinue
 
 Write-Host "3. Removing the graphics card choices we added..."
 $added = Join-Path $PSScriptRoot "optimize_pc_added.txt"

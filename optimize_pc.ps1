@@ -31,8 +31,15 @@ if ($cs.AutomaticManagedPagefile) { Write-Host "   Already fine." }
 else { Set-CimInstance -InputObject $cs -Property @{AutomaticManagedPagefile = $true}; Write-Host "   Fixed. Takes effect after a restart." }
 
 Write-Host "3. Visual effects: best performance, keeping smooth fonts..."
-Set-Reg "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting" 2
-Set-Reg "HKCU:\Control Panel\Desktop" "FontSmoothing" "2" "String"
+# VisualFXSetting alone only moves the radio button; UserPreferencesMask + MinAnimate are what turn effects off.
+$desk = "HKCU:\Control Panel\Desktop"
+$backup = Join-Path $PSScriptRoot "optimize_pc_mask.txt"   # original mask, restored by the undo script
+if (-not (Test-Path $backup)) { ((Get-ItemProperty $desk).UserPreferencesMask | ForEach-Object { $_.ToString("X2") }) -join "," | Set-Content $backup }
+Set-Reg "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" "VisualFXSetting" 3
+Set-Reg $desk "UserPreferencesMask" ([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00)) "Binary"
+Set-Reg "$desk\WindowMetrics" "MinAnimate" "0" "String"
+Set-Reg "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "TaskbarAnimations" 0
+Set-Reg $desk "FontSmoothing" "2" "String"
 Set-Reg "HKCU:\Control Panel\Desktop" "FontSmoothingType" 2
 Write-Host "   Done. Takes full effect after signing out and in."
 

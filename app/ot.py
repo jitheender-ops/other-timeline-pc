@@ -27,6 +27,7 @@ PORT = 8095
 WIN = os.name == "nt"
 VOICE_EXT = (".wav", ".mp3", ".m4a", ".flac")
 LUFS, TP = -14.0, -1.5
+SETTLE_S = 60  # a folder must sit unchanged this long before it builds (Explorer copies take a while)
 WHISPER = "small.en"  # ponytail: CPU int8 (~5 min per 15 min of voice); CUDA on the 2 GB card needs extra libs, add if speed matters
 
 # winget puts new tools here, and a process started before the install doesn't see them on PATH yet
@@ -35,6 +36,7 @@ if WIN:
     os.environ["PATH"] = os.pathsep.join([os.environ["PATH"], rf"{la}\Microsoft\WinGet\Links",
                                           rf"{os.environ.get('ProgramFiles', '')}\nodejs"])
 
+NOWIN = {"creationflags": 0x08004000} if WIN else {}  # CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY: no console pop-ups
 jobs = []  # video folder names waiting to build or upload, in order
 lock, slock = threading.Lock(), threading.Lock()
 
@@ -50,16 +52,23 @@ def log(msg):
 def status(v, **kw):
     p = v / "status.json"
     with slock:  # the builder and the folder scan both write it
-        s = json.loads(p.read_text()) if p.exists() else {}
+        s = read_json(p)
         if kw:
             s.update(kw, updated=time.strftime("%Y-%m-%d %H:%M"))
-            p.write_text(json.dumps(s, indent=1))
+            tmp = p.with_suffix(".tmp")  # a power cut mid-write never leaves a broken status.json
+            tmp.write_text(json.dumps(s, indent=1)); os.replace(tmp, p)
     return s
 
 
+def read_json(p):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # missing, or hand-edited with a typo: treat as empty, never crash the dashboard
+        return {}
+
+
 def meta(v):
-    p = v / "video.json"
-    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    return read_json(v / "video.json")
 
 
 def voice_of(v):
@@ -77,15 +86,16 @@ def sh(cmd, v=None, cwd=None, env=None):
     log("$ " + " ".join(map(str, cmd)))
     p = subprocess.Popen([str(c) for c in cmd], cwd=cwd, env={**os.environ, **(env or {})}, text=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace",
-                         creationflags=0x00004000 if WIN else 0)  # BELOW_NORMAL_PRIORITY_CLASS
-    out = []
+                         stdin=subprocess.DEVNULL, **NOWIN)
+    out, shown = [], 0
     for line in p.stdout:
         line = line.rstrip()
         if line:
             out.append(line); out[:] = out[-200:]
             with open(LOG, "a", encoding="utf-8") as f:
                 f.write("    " + line + "\n")
-            if v: status(v, detail=line[-160:])
+            if v and time.time() - shown > 1:  # one status write a second, not one per output line
+                status(v, detail=line[-160:]); shown = time.time()
     if p.wait():
         raise RuntimeError(f"{Path(str(cmd[0])).name} failed: {(out or ['no output'])[-1]}")
     return "\n".join(out)
@@ -99,7 +109,9 @@ def measure(src, pre=""):
     """loudnorm first pass -> the numbers the second pass needs."""
     af = (pre + "," if pre else "") + f"loudnorm=I={LUFS}:TP={TP}:LRA=11:print_format=json"
     out = subprocess.run([tool("ffmpeg"), "-hide_banner", "-nostats", "-i", str(src), "-af", af, "-f", "null", "-"],
-                         capture_output=True, text=True, encoding="utf-8", errors="replace").stderr
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", **NOWIN).stderr
+    if "{" not in out:
+        raise RuntimeError(f"couldn't read the sound in {Path(src).name} (no audio track?)")
     return json.loads(out[out.rindex("{"):out.rindex("}") + 1])
 
 
@@ -138,33 +150,34 @@ def transcribe(wav, b, v):
 
 
 def scene_audio(html):
-    """(vo src, composition seconds) from the project's index.html."""
+    """(vo src, vo start seconds, composition seconds) from the project's index.html."""
     tag = re.search(r'<audio[^>]*\bid="vo"[^>]*>', html)
     src = tag and re.search(r'\bsrc="([^"]+)"', tag.group(0))
+    start = tag and re.search(r'\bdata-start="([\d.]+)"', tag.group(0))
     dur = re.search(r'data-composition-id="main"[^>]*\bdata-duration="([\d.]+)"', html) \
         or re.search(r'\bdata-duration="([\d.]+)"', html)
-    return (src.group(1) if src else None), (float(dur.group(1)) if dur else None)
+    return (src.group(1) if src else None), (float(start.group(1)) if start else 0.0), (float(dur.group(1)) if dur else None)
 
 
 def duration(f):
     return float(subprocess.run([tool("ffprobe"), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
-                                 str(f)], capture_output=True, text=True).stdout.strip() or 0)
+                                 str(f)], capture_output=True, text=True, **NOWIN).stdout.strip() or 0)
 
 
 def size(f):
     out = subprocess.run([tool("ffprobe"), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-                          "-of", "csv=p=0", str(f)], capture_output=True, text=True).stdout.strip()
+                          "-of", "csv=p=0", str(f)], capture_output=True, text=True, **NOWIN).stdout.strip()
     return tuple(map(int, out.split(","))) if out else (0, 0)
 
 
-def checks(v, b, voice_s, comp_s):
+def checks(v, b, voice_s, vo_start, comp_s):
     final, kind = b / "final.mp4", meta(v).get("kind", "long")
     m, (w, h), d = measure(final), size(final), duration(final)
     qc = [
         ("Loudness about -14 LUFS", abs(float(m["input_i"]) + 14) <= 1, f"{float(m['input_i']):.1f} LUFS"),
         ("Peaks below -1 dB", float(m["input_tp"]) <= -1.0, f"{float(m['input_tp']):.1f} dBTP"),
-        ("Voice fits the picture", not comp_s or voice_s <= comp_s + 0.5,
-         f"voice {voice_s:.0f}s, picture {comp_s or d:.0f}s"),
+        ("Voice fits the picture", not comp_s or vo_start + voice_s <= comp_s + 0.5,
+         f"voice {vo_start:.0f}-{vo_start + voice_s:.0f}s, picture {comp_s or d:.0f}s"),
         ("Right shape", (h > w) if kind == "short" else (w > h), f"{w}x{h} ({kind})"),
         ("Has a title", bool(meta(v).get("title")), meta(v).get("title", "add a title in video.json")[:60]),
     ]
@@ -179,13 +192,14 @@ def checks(v, b, voice_s, comp_s):
 def build(v):
     b = v / "build"; b.mkdir(exist_ok=True)
     voice = voice_of(v)
+    status(v, state="building", step="Starting", error=None, voice_sig=sig(voice))  # first, so a failure isn't retried in a loop
     index = v / "index.html"
     if not index.exists():
         raise RuntimeError("this folder has no index.html (the HyperFrames scene). Copy the whole scene folder in.")
-    vo_src, comp_s = scene_audio(index.read_text(encoding="utf-8"))
+    vo_src, vo_start, comp_s = scene_audio(index.read_text(encoding="utf-8"))
     if not vo_src:
         raise RuntimeError('the scene has no <audio id="vo" src="..."> line for the voice')
-    status(v, state="building", step="1/5 Cleaning the voice", error=None, voice_mtime=voice.stat().st_mtime)
+    status(v, step="1/5 Cleaning the voice")
     loudnorm(voice, b / "voice.wav", v, pre="highpass=f=80,deesser,acompressor=threshold=-20dB:ratio=3:attack=5:release=80")
     status(v, step="2/5 Writing captions")
     transcribe(b / "voice.wav", b, v)
@@ -197,7 +211,7 @@ def build(v):
     status(v, step="4/5 Mastering the sound")
     loudnorm(b / "picture.mp4", b / "final.mp4", v, video=True)
     status(v, step="5/5 Checking")
-    qc = checks(v, b, duration(b / "voice.wav"), comp_s)
+    qc = checks(v, b, duration(b / "voice.wav"), vo_start, comp_s)
     status(v, state="review", step=None, detail=None, qc=qc)
     log(f"{v.name}: ready for review ({sum(c['ok'] for c in qc)}/{len(qc)} checks pass)")
 
@@ -206,7 +220,9 @@ def upload(v):
     import studio
     status(v, state="uploading", step="Uploading to YouTube Studio", error=None)
     vid = studio.upload(v / "build" / "final.mp4", meta(v), lambda d: status(v, detail=d))
-    status(v, state="uploaded", step=None, detail=None, video_id=vid, link=f"https://studio.youtube.com/video/{vid}/edit")
+    # no id read back still means it's in Studio: say so, so nobody approves it twice
+    status(v, state="uploaded", step=None, detail=None, video_id=vid,
+           link=f"https://studio.youtube.com/video/{vid}/edit" if vid else "https://studio.youtube.com/")
     log(f"{v.name}: uploaded as {vid}")
 
 
@@ -222,7 +238,8 @@ def worker():
             (upload if status(v).get("state") == "approved" else build)(v)
         except BaseException as e:
             log(f"{name}: FAILED\n{traceback.format_exc()}")
-            status(v, state="failed" if status(v).get("state") != "uploading" else "upload_failed", error=str(e)[:400])
+            up_ = status(v).get("state") in ("approved", "uploading")
+            status(v, state="upload_failed" if up_ else "failed", error=str(e)[:400])
         finally:
             keep_awake(False)
 
@@ -233,15 +250,31 @@ def queue(name):
             jobs.append(name)
 
 
+def sig(voice):
+    st = voice.stat()
+    return f"{voice.name}:{st.st_size}:{st.st_mtime}"
+
+
+def settled(v):
+    """Nothing in the folder (outside build/) changed for SETTLE_S: the copy has finished."""
+    newest = max((f.stat().st_mtime for f in v.rglob("*") if f.is_file() and "build" not in f.relative_to(v).parts
+                  and f.name not in ("status.json", "status.tmp")), default=0)
+    return time.time() - newest > SETTLE_S
+
+
 def scan():
-    """Every 20 s: a folder with a new or replaced voice file gets built."""
+    """Every 20 s: a fully copied folder with a new or replaced voice file gets built."""
     for v in sorted(p for p in VIDEOS.iterdir() if p.is_dir()):
         s, voice = status(v), voice_of(v)
-        if not voice:
-            if s.get("state") != "waiting_voice": status(v, state="waiting_voice")
+        st = s.get("state")
+        if st in ("queued", "building", "approved", "uploading"):
             continue
-        replaced = voice.stat().st_mtime != s.get("voice_mtime")
-        if s.get("state") in (None, "waiting_voice") or (replaced and s.get("state") in ("review", "uploaded", "failed")):
+        if not voice or not (v / "index.html").exists():
+            want = "waiting_voice" if not voice else "waiting_scene"
+            if st in (None, "waiting_voice", "waiting_scene") and st != want: status(v, state=want)
+            continue
+        new = st in (None, "waiting_voice", "waiting_scene") or sig(voice) != s.get("voice_sig")
+        if new and settled(v):
             status(v, state="queued", step=None, error=None); queue(v.name)
 
 
@@ -285,7 +318,11 @@ def videos():
 
 
 def tail(n=60):
-    return LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-n:] if LOG.exists() else []
+    if not LOG.exists():
+        return []
+    with open(LOG, "rb") as f:  # only the end: the log can be large
+        f.seek(max(0, f.seek(0, 2) - 64_000))
+        return f.read().decode("utf-8", "replace").splitlines()[-n:]
 
 
 def video_dir(q):
@@ -343,6 +380,8 @@ class H(BaseHTTPRequestHandler):
             if u.path == "/play":
                 open_path(v / "build" / "final.mp4")
             elif u.path == "/rebuild":
+                if status(v).get("state") not in ("failed", "review", "uploaded", "upload_failed", "waiting_scene"):
+                    return self.send(409, {"error": "it's busy right now"})
                 status(v, state="queued", error=None); queue(v.name)
             elif u.path == "/approve":
                 if status(v).get("state") not in ("review", "upload_failed"):
@@ -368,11 +407,12 @@ def setup():
     for t in ("ffmpeg", "ffprobe"):
         subprocess.run([tool(t), "-version"], capture_output=True, check=True)
     if WIN:  # desktop icon + start at sign-in (quietly)
+        q = lambda x: str(x).replace("'", "''")  # PowerShell single-quote escaping (C:\Users\O'Brien)
         pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
         for folder, args in (("Desktop", ""), ("Startup", " --quiet")):
             ps = ("$w=New-Object -ComObject WScript.Shell;"
                   f"$s=$w.CreateShortcut([Environment]::GetFolderPath('{folder}')+'\\The Other Timeline.lnk');"
-                  f"$s.TargetPath='{pyw}';$s.Arguments='\"{Path(__file__)}\"{args}';$s.WorkingDirectory='{ROOT}';$s.Save()")
+                  f"$s.TargetPath='{q(pyw)}';$s.Arguments='\"{q(Path(__file__))}\"{args}';$s.WorkingDirectory='{q(ROOT)}';$s.Save()")
             subprocess.run(["powershell", "-NoProfile", "-Command", ps], check=True)
     print("Setup finished.", flush=True)
 
@@ -381,8 +421,8 @@ def selftest():
     assert srt_time(3725.5) == "01:02:05,500"
     assert to_srt([(0, 1.2, " Hi ")]) == "1\n00:00:00,000 --> 00:00:01,200\nHi\n"
     html = '<div data-composition-id="main" data-start="0" data-duration="27"><audio id="vo" src="assets/audio/vo.wav" data-start="1">'
-    assert scene_audio(html) == ("assets/audio/vo.wav", 27.0)
-    assert scene_audio("<audio id='x'>") == (None, None)
+    assert scene_audio(html) == ("assets/audio/vo.wav", 1.0, 27.0)
+    assert scene_audio("<audio id='x'>") == (None, 0.0, None)
     print("selftest ok")
 
 
@@ -394,6 +434,8 @@ if __name__ == "__main__":
         srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     except OSError:  # already running: just show it
         webbrowser.open(f"http://localhost:{PORT}"); sys.exit()
+    if LOG.exists() and LOG.stat().st_size > 5e6:  # keep one old log, never grow forever
+        os.replace(LOG, LOGS / "ot.old.log")
     log("started")
     threading.Thread(target=worker, daemon=True).start()
     threading.Thread(target=watcher, daemon=True).start()

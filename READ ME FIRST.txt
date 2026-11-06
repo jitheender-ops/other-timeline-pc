@@ -21,7 +21,10 @@ FIRST-TIME SIGN-IN (one time)
 5. Never sign out of it or delete its profile.
 
 DAILY USE
-1. Copy a video folder from the Mac into the "videos" folder.
+1. Copy a video folder from the Mac into the "videos" folder
+   (USB stick or Google Drive). Jitheender prepares it, with its
+   title and schedule already inside (video.json). Schedule times
+   are read in THIS PC's time zone.
 2. Put the voice recording inside that video folder.
    Name it voice.wav, voice.mp3 or voice.m4a.
 3. The build starts by itself. The dashboard shows progress.
@@ -33,26 +36,37 @@ DAILY USE
 8. Open YouTube Studio and publish it when you are ready.
 
 WHAT EACH STATUS MEANS
-Waiting for voice   The folder has no voice file yet.
-Queued              Waiting its turn to build.
-Building            Working on it. Leave the PC on.
+Waiting for the voice recording
+                    The folder has no voice file yet.
+Waiting for the scene files
+                    The folder is missing index.html. Copy the
+                    whole folder from the Mac again.
+In line             Waiting its turn. It starts about a minute
+                    after the folder finished copying.
+Building...         Working on it. Leave the PC on.
 Ready to check      Finished. Watch it, then approve.
-Approved            Will upload next.
-Uploading           Sending to YouTube. Do not close Chrome.
-Uploaded            On YouTube as Private. Publish it in Studio.
-Something went wrong / Upload failed
+Uploading to YouTube...
+                    Sending it. Do not close the Chrome window.
+On YouTube (Private)
+                    Done. Publish it in YouTube Studio.
+Something went wrong / The upload didn't finish
                     See TROUBLESHOOTING below.
 
 TROUBLESHOOTING
 - Dashboard won't open:
   Double-click "The Other Timeline" icon on the desktop.
-- "Something went wrong":
+- "Something went wrong" (the build failed):
   Click Retry. If it fails again, copy the Activity log
   from the dashboard and send it to Jitheender.
-- A Google sign-in page appears:
-  Sign in again in the Chrome window, then click Retry.
+- "The upload didn't finish":
+  Do NOT press Build again (that rebuilds for hours).
+  First open YouTube Studio and check the video is not
+  already there. If it isn't, click "Approve again".
+- It says to sign in:
+  Sign in again in the Chrome window, then "Approve again".
 - "Daily upload limit":
-  YouTube limits uploads per day. Wait 24 hours, then retry.
+  YouTube limits uploads per day. Wait 24 hours, then
+  click "Approve again".
 - Disk almost full:
   Delete old folders in "videos" once they are on YouTube.
 

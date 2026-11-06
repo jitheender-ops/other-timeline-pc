@@ -90,6 +90,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const STATES = {
   waiting_voice: ["Waiting for the voice recording", ""],
+  waiting_scene: ["Waiting for the scene files (index.html)", ""],
   queued: ["In line", ""],
   building: ["Building…", "amber"],
   failed: ["Something went wrong", "red"],

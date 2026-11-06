@@ -28,6 +28,9 @@ rem New tools are not on PATH in this window yet, so find them directly.
 set "PY="
 if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 if not defined PY if exist "%ProgramFiles%\Python312\python.exe" set "PY=%ProgramFiles%\Python312\python.exe"
+if not defined PY if exist "C:\Python312\python.exe" set "PY=C:\Python312\python.exe"
+rem Last try: the Python launcher knows every 3.12 install, wherever it is.
+if not defined PY for /f "delims=" %%i in ('py -3.12 -c "import sys;print(sys.executable)" 2^>nul') do set "PY=%%i"
 if not defined PY (
   echo.
   echo  ERROR: Python 3.12 was not found after installing it.

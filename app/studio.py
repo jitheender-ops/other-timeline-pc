@@ -108,7 +108,7 @@ def set_schedule(pg, scope, date, tm):
 
 
 def upload(path, meta, progress=print):
-    title, desc = norm(meta["title"]), meta.get("description") or ""
+    title, desc = norm(meta.get("title") or ""), meta.get("description") or ""
     if not title: raise RuntimeError("video.json has no title")
     if len(title) > 100: raise RuntimeError(f"title is {len(title)} characters; YouTube allows 100")
     if not Path(path).is_file(): raise RuntimeError(f"{path} not found")
@@ -146,8 +146,7 @@ def upload(path, meta, progress=print):
             raise RuntimeError(f"{e} -- the Studio tab was left open so the draft isn't lost; it may still save itself. "
                                "Check Studio for a duplicate before pressing Approve again") from e
         pg.close()
-    if not vid: raise RuntimeError("upload finished but no video id was found; check Studio")
-    return vid
+    return vid  # '' = saved in Studio but its link wasn't readable; the caller must not upload it again
 
 
 def dialog(pg, title, desc, sched, progress):
