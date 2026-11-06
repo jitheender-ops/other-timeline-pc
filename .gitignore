@@ -1,0 +1,8 @@
+.venv/
+videos/
+logs/
+chrome-profile/
+__pycache__/
+*.part.*
+.DS_Store
+.claude/

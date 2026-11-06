@@ -1,0 +1,4 @@
+faster-whisper>=1.1,<2
+playwright>=1.47,<2
+psutil>=5.9,<8
+av>=13,<16  # av 16+ breaks faster-whisper's decode_audio
